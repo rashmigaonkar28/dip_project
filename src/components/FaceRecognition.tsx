@@ -22,6 +22,9 @@ export default function FaceRecognition({ onBack }: Props) {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageResult, setImageResult] = useState<LastResult | null>(null);
   const rafRef = useRef<number>();
+  const [threshold, setThreshold] = useState<number>(MATCH_THRESHOLD);
+  const frameDistancesRef = useRef<number[]>([]);
+  const [topCandidates, setTopCandidates] = useState<{name:string;distance:number}[]>([]);
 
   useEffect(() => {
     async function init() {
@@ -58,21 +61,25 @@ export default function FaceRecognition({ onBack }: Props) {
       const gray = extractGrayscaleFromVideo(videoRef.current, faceBox);
       const processed = processImageData(gray);
       const vectors = listVectors();
-      let bestDistance = Infinity;
-      let bestName = 'Unknown';
+      const distances: {name:string; distance:number}[] = [];
       for (const v of vectors) {
         const d = euclidean(processed.vector, v.data);
-        if (d < bestDistance) {
-          bestDistance = d;
-          const person = listPeople().find(p => p.id === v.personId);
-          bestName = person ? person.name : '?';
-        }
+        const person = listPeople().find(p => p.id === v.personId);
+        distances.push({ name: person ? person.name : '?', distance: d });
       }
+      distances.sort((a,b)=>a.distance-b.distance);
+      const best = distances[0] || { name: 'Unknown', distance: Infinity };
+      // update top-3 for UI
+      setTopCandidates(distances.slice(0,3));
+      // multi-frame smoothing: keep last 10 distances
+      frameDistancesRef.current.push(best.distance);
+      if (frameDistancesRef.current.length > 10) frameDistancesRef.current.shift();
+      const avgDistance = frameDistancesRef.current.reduce((s,v)=>s+v,0) / frameDistancesRef.current.length;
       const similarity = similarityFromDistance(bestDistance);
-      const isMatch = bestDistance < MATCH_THRESHOLD;
-      const result: LastResult = { name: bestName, distance: bestDistance, similarity, isMatch, brightness: processed.brightness, contrast: processed.contrast };
+      const isMatch = avgDistance < threshold;
+      const result: LastResult = { name: best.name, distance: avgDistance, similarity, isMatch, brightness: processed.brightness, contrast: processed.contrast };
       setLast(result);
-      addRecognitionLog({ personId: isMatch ? (listPeople().find(p=>p.name===bestName)?.id || null) : null, distance: bestDistance, similarity, isMatch, timestamp: Date.now() });
+      addRecognitionLog({ personId: isMatch ? (listPeople().find(p=>p.name===best.name)?.id || null) : null, distance: avgDistance, similarity, isMatch, timestamp: Date.now() });
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -96,16 +103,18 @@ export default function FaceRecognition({ onBack }: Props) {
     const gray = extractGrayscaleFromImage(img, faceBox);
     const processed = processImageData(gray);
     const vectors = listVectors();
-    let bestDistance = Infinity; let bestName = 'Unknown';
-    for (const v of vectors) {
+    const distances: {name:string; distance:number}[] = vectors.map(v => {
       const d = euclidean(processed.vector, v.data);
-      if (d < bestDistance) { bestDistance = d; const person = listPeople().find(p=>p.id===v.personId); bestName = person?person.name:'?'; }
-    }
-    const similarity = similarityFromDistance(bestDistance);
-    const isMatch = bestDistance < MATCH_THRESHOLD;
-    const result: LastResult = { name: bestName, distance: bestDistance, similarity, isMatch, brightness: processed.brightness, contrast: processed.contrast };
+      const person = listPeople().find(p=>p.id===v.personId);
+      return { name: person?person.name:'?', distance: d };
+    }).sort((a,b)=>a.distance-b.distance);
+    setTopCandidates(distances.slice(0,3));
+    const best = distances[0] || { name: 'Unknown', distance: Infinity };
+    const similarity = similarityFromDistance(best.distance);
+    const isMatch = best.distance < threshold;
+    const result: LastResult = { name: best.name, distance: best.distance, similarity, isMatch, brightness: processed.brightness, contrast: processed.contrast };
     setImageResult(result);
-    addRecognitionLog({ personId: isMatch ? (listPeople().find(p=>p.name===bestName)?.id || null) : null, distance: bestDistance, similarity, isMatch, timestamp: Date.now() });
+    addRecognitionLog({ personId: isMatch ? (listPeople().find(p=>p.name===best.name)?.id || null) : null, distance: best.distance, similarity, isMatch, timestamp: Date.now() });
     setStatus('Image processed');
   };
 
@@ -143,6 +152,11 @@ export default function FaceRecognition({ onBack }: Props) {
               <ImageIcon className="w-4 h-4" /> <span>Image</span>
               <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={e=>{ setImageFile(e.target.files?.[0]||null); setImageResult(null); }} />
             </label>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-600">Threshold</span>
+              <input type="range" min={5} max={100} value={threshold} onChange={e=>setThreshold(Number(e.target.value))} />
+              <span className="text-xs text-gray-600">{threshold.toFixed(0)}</span>
+            </div>
             <button
               disabled={!imageFile}
               onClick={processImageFile}
@@ -167,7 +181,20 @@ export default function FaceRecognition({ onBack }: Props) {
               <Metric label="Brightness" value={(imageResult||last)!.brightness.toFixed(3)} />
               <Metric label="Contrast" value={(imageResult||last)!.contrast.toFixed(3)} />
               <Metric label="Decision" value={(imageResult||last)!.isMatch ? 'MATCH FOUND' : 'UNKNOWN FACE'} highlight={(imageResult||last)!.isMatch} />
-              <p className="text-xs text-gray-500 mt-2">Threshold: distance &lt; {MATCH_THRESHOLD} indicates match.</p>
+              <p className="text-xs text-gray-500 mt-2">Threshold: distance &lt; {threshold} indicates match.</p>
+              {topCandidates.length>0 && (
+                <div className="mt-3">
+                  <p className="text-xs text-gray-500">Top candidates</p>
+                  <div className="mt-1 space-y-1">
+                    {topCandidates.map((c,idx)=>(
+                      <div key={idx} className="flex justify-between text-xs">
+                        <span className="text-gray-600">{idx+1}. {c.name}</span>
+                        <span>{c.distance.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center flex-1 text-center text-gray-500">
