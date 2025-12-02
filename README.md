@@ -1,8 +1,50 @@
-# Face Recognition System
+# Local CSV Data Store (Supabase Removed)
+
+This repository has been modified to run a fully offline, browser‑only face recognition demo using **vector representation** and **Euclidean distance**, storing data in **`localStorage`** instead of Supabase. The original cloud / auth features are removed. All processing (capture, vectorization, matching) happens locally.
+
+New components:
+- `FaceCapture` – capture webcam frames, vectorize (100×100 grayscale → 10,000‑element vector), store samples locally.
+- `FaceRecognition` – continuous matching against stored vectors; decision threshold distance < 25.
+- `Statistics` – summary counts + recent recognition attempts.
+- `storage.ts` – localStorage persistence of people, vectors, recognition logs.
+- `faceProcessing.ts` – vector building, brightness/contrast metrics, Euclidean distance & similarity heuristic.
+ - Image upload support – register persons from PNG/JPEG files or run recognition on a single uploaded image.
+
+Face detection uses the experimental `FaceDetector` API when available; otherwise it falls back to a centered crop.
+
+To reset data, clear browser localStorage key `faceRecDB_v1`.
+
+## Quick Start (Offline Version)
+
+```bash
+git clone <repo>
+cd dips
+npm install
+npm run dev
+```
+
+Open the dev server URL (e.g. http://localhost:5174). You can:
+- Capture 50 samples for a person (auto‑progress).
+- Run real‑time recognition and view distance, similarity, brightness, contrast.
+- Inspect statistics and recent recognition events.
+ - Upload multiple images to register a person without the webcam.
+ - Upload a single image to perform recognition on that file.
+
+All data stays local to your browser.
+
+## Notes
+1. Data persisted automatically in localStorage.
+2. No authentication or network usage.
+3. Image upload: PNG/JPEG accepted; images are processed client-side (center crop if face detection unavailable).
+4. To reintroduce a backend, replace `storage.ts` with server API calls.
+
+---
+
+# (Legacy) Face Recognition System
 
 ## Digital Image Processing Project
 
-A production-ready web application for face recognition using **vector representation** and **Euclidean distance similarity matching**. This system demonstrates core DIP concepts through real-time face capture, preprocessing, and intelligent recognition.
+Legacy description below (original project concept):
 
 ---
 
@@ -434,7 +476,13 @@ Educational use - MIT License
 ## ❓ FAQ
 
 **Q: Will it work offline?**
-A: No, this web version requires Supabase. For offline use, see the "Convert to Local Machine" guide.
+A: Yes. All capture and recognition run locally; data lives in localStorage.
+ 
+**Q: How do I register using images instead of webcam?**
+ A: On the Register page, toggle "Use uploaded images" then select up to 50 PNG/JPEG files and press Start Capturing.
+
+**Q: How do I run recognition on an image?**
+ A: On the Recognition page, choose an image file and click "Run Image Recognition"; results appear in the analysis panel.
 
 **Q: How accurate is it?**
 A: Accuracy depends on capture quality and lighting. With good conditions, expect 85-95% accuracy for known faces.
