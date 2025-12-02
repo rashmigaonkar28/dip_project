@@ -25,6 +25,16 @@ export default function FaceRecognition({ onBack }: Props) {
   const [threshold, setThreshold] = useState<number>(MATCH_THRESHOLD);
   const frameDistancesRef = useRef<number[]>([]);
   const [topCandidates, setTopCandidates] = useState<{name:string;distance:number}[]>([]);
+  const useCosine = false; // future toggle
+
+  function l2Normalize(vec: number[]): number[] {
+    const norm = Math.sqrt(vec.reduce((s,v)=>s+v*v,0)) || 1;
+    return vec.map(v=>v/norm);
+  }
+  function cosineSim(a:number[], b:number[]): number {
+    let dot = 0; for (let i=0;i<a.length;i++) dot += a[i]*b[i];
+    return dot; // with L2 normed vectors, dot == cosine
+  }
 
   useEffect(() => {
     async function init() {
@@ -60,22 +70,36 @@ export default function FaceRecognition({ onBack }: Props) {
       const faceBox = await detectFace(videoRef.current).catch(()=>null);
       const gray = extractGrayscaleFromVideo(videoRef.current, faceBox);
       const processed = processImageData(gray);
+      const qVec = useCosine ? l2Normalize(processed.vector) : processed.vector;
       const vectors = listVectors();
       const distances: {name:string; distance:number}[] = [];
       for (const v of vectors) {
-        const d = euclidean(processed.vector, v.data);
+        const d = useCosine ? (1 - cosineSim(qVec, l2Normalize(v.data))) : euclidean(qVec, v.data);
         const person = listPeople().find(p => p.id === v.personId);
         distances.push({ name: person ? person.name : '?', distance: d });
       }
       distances.sort((a,b)=>a.distance-b.distance);
-      const best = distances[0] || { name: 'Unknown', distance: Infinity };
+      // Aggregate per-person using average of top-k distances
+      const perPerson: Record<string, number[]> = {};
+      for (const d of distances) {
+        if (!perPerson[d.name]) perPerson[d.name] = [];
+        perPerson[d.name].push(d.distance);
+      }
+      const k = 3;
+      const personScores = Object.entries(perPerson).map(([name, arr])=>{
+        arr.sort((a,b)=>a-b);
+        const take = arr.slice(0, Math.min(k, arr.length));
+        const avg = take.reduce((s,v)=>s+v,0)/take.length;
+        return { name, distance: avg };
+      }).sort((a,b)=>a.distance-b.distance);
+      const best = personScores[0] || { name: 'Unknown', distance: Infinity };
       // update top-3 for UI
-      setTopCandidates(distances.slice(0,3));
+      setTopCandidates(personScores.slice(0,3));
       // multi-frame smoothing: keep last 10 distances
       frameDistancesRef.current.push(best.distance);
       if (frameDistancesRef.current.length > 10) frameDistancesRef.current.shift();
       const avgDistance = frameDistancesRef.current.reduce((s,v)=>s+v,0) / frameDistancesRef.current.length;
-      const similarity = similarityFromDistance(bestDistance);
+      const similarity = similarityFromDistance(avgDistance);
       const isMatch = avgDistance < threshold;
       const result: LastResult = { name: best.name, distance: avgDistance, similarity, isMatch, brightness: processed.brightness, contrast: processed.contrast };
       setLast(result);
@@ -103,13 +127,27 @@ export default function FaceRecognition({ onBack }: Props) {
     const gray = extractGrayscaleFromImage(img, faceBox);
     const processed = processImageData(gray);
     const vectors = listVectors();
+    const qVec = useCosine ? l2Normalize(processed.vector) : processed.vector;
     const distances: {name:string; distance:number}[] = vectors.map(v => {
-      const d = euclidean(processed.vector, v.data);
+      const d = useCosine ? (1 - cosineSim(qVec, l2Normalize(v.data))) : euclidean(qVec, v.data);
       const person = listPeople().find(p=>p.id===v.personId);
       return { name: person?person.name:'?', distance: d };
     }).sort((a,b)=>a.distance-b.distance);
-    setTopCandidates(distances.slice(0,3));
-    const best = distances[0] || { name: 'Unknown', distance: Infinity };
+    // Aggregate per person top-k distances
+    const perPerson: Record<string, number[]> = {};
+    for (const d of distances) {
+      if (!perPerson[d.name]) perPerson[d.name] = [];
+      perPerson[d.name].push(d.distance);
+    }
+    const k = 3;
+    const personScores = Object.entries(perPerson).map(([name, arr])=>{
+      arr.sort((a,b)=>a-b);
+      const take = arr.slice(0, Math.min(k, arr.length));
+      const avg = take.reduce((s,v)=>s+v,0)/take.length;
+      return { name, distance: avg };
+    }).sort((a,b)=>a.distance-b.distance);
+    setTopCandidates(personScores.slice(0,3));
+    const best = personScores[0] || { name: 'Unknown', distance: Infinity };
     const similarity = similarityFromDistance(best.distance);
     const isMatch = best.distance < threshold;
     const result: LastResult = { name: best.name, distance: best.distance, similarity, isMatch, brightness: processed.brightness, contrast: processed.contrast };
